@@ -26,23 +26,35 @@ namespace FhirLoader
             bool reCreateBufferIfExists = false,
             bool forcePost = false,
             int maxDegreeOfParallelism = 8,
-            int refreshInterval = 5)
+            int refreshInterval = 5,
+            string resourceId = null,
+            bool bufferOnly = false)
         {
 
-            HttpClient httpClient = new HttpClient();
-            MetricsCollector metrics = new MetricsCollector();
-
             // Create an ndjson file from the FHIR bundles in folder
-            if (!(new FileInfo(bufferFileName).Exists) || reCreateBufferIfExists)
+            // check to see if we only want to generate the buffer - helpful when reviewing references and individual records 
+            if (!(new FileInfo(bufferFileName).Exists) || reCreateBufferIfExists || bufferOnly)
             {
                 Console.WriteLine("Creating ndjson buffer file...");
                 CreateBufferFile(inputFolder, bufferFileName);
                 Console.WriteLine("Buffer created.");
             }
+            // If specified, used the resource Id for the auth on the proxy.
+            // Example proxy url: https://proxyABC123.azurewebsites.net/fhir
+            // Otherwise, the URL is the auth resource
+            resourceId = resourceId ?? fhirServerUrl.AbsoluteUri.TrimEnd('/');
+
+            // exit if we should only create the buffer file
+            if (bufferOnly) {
+                return;
+            }
+
+            HttpClient httpClient = new HttpClient();
+            MetricsCollector metrics = new MetricsCollector();
 
             bool useAuth = authority != null && clientId != null && clientSecret != null && accessToken == null;
 
-            AuthenticationContext authContext = useAuth ? new AuthenticationContext(authority.AbsoluteUri, new TokenCache()) : null;
+            AuthenticationContext authContext = useAuth ? new AuthenticationContext(authority.AbsoluteUri, true, new TokenCache()) : null;
             ClientCredential clientCredential = useAuth ? new ClientCredential(clientId, clientSecret) : null;
 
             var randomGenerator = new Random();
@@ -79,14 +91,14 @@ namespace FhirLoader
                     .ExecuteAsync(() =>
                     {
                         var message = forcePost || string.IsNullOrEmpty(id)
-                            ? new HttpRequestMessage(HttpMethod.Post, new Uri(fhirServerUrl, $"/{resource_type}"))
-                            : new HttpRequestMessage(HttpMethod.Put, new Uri(fhirServerUrl, $"/{resource_type}/{id}"));
+                            ? new HttpRequestMessage(HttpMethod.Post, new Uri($"{fhirServerUrl.ToString().TrimEnd('/')}/{resource_type}"))
+                            : new HttpRequestMessage(HttpMethod.Put, new Uri($"{fhirServerUrl.ToString().TrimEnd('/')}/{resource_type}/{id}"));
 
                         message.Content = content;
 
                         if (useAuth)
                         {
-                            var authResult = authContext.AcquireTokenAsync(fhirServerUrl.AbsoluteUri.TrimEnd('/'), clientCredential).Result;
+                            var authResult = authContext.AcquireTokenAsync(resourceId, clientCredential).Result;
                             message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", authResult.AccessToken);
                         }
                         else if (accessToken != null)
